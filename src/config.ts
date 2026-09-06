@@ -41,10 +41,27 @@ export const detectProjectDir = (): string => {
   return process.cwd();
 };
 
+/**
+ * An absent config is normal — plenty of commands run on `--key` alone, so it
+ * stays silent. A config that exists but does not parse is not normal, and used
+ * to be indistinguishable from absent: every value silently became undefined,
+ * so `zeph` behaved as if the file had never been written. That is precisely
+ * how "it isn't reading my config" looks from the outside, with nothing
+ * anywhere to say otherwise. Say it, on stderr, and carry on with defaults.
+ */
 export const loadConfig = (): ZephConfig => {
+  let raw: string;
   try {
-    return JSON.parse(readFileSync(CONFIG_FILE, 'utf-8')) as ZephConfig;
+    raw = readFileSync(CONFIG_FILE, 'utf-8');
   } catch {
+    return {};
+  }
+  try {
+    return JSON.parse(raw) as ZephConfig;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error(`zeph: ${CONFIG_FILE} is not valid JSON, so it is being ignored (${reason}).`);
+    console.error('zeph: fix the file, or re-run `zeph install` to write a fresh one.');
     return {};
   }
 };

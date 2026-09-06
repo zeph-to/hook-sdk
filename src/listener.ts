@@ -28,6 +28,7 @@ import { homedir, hostname, userInfo } from 'os';
 import { join, basename, isAbsolute, resolve, sep } from 'path';
 import WebSocket from 'ws';
 import { loadConfig, resolvedEnv, VERSION } from './config.js';
+import { resolveWsUrlDetailed } from './ws-url.js';
 import {
     clearListenerRuntime,
     clearStaleListenerRuntime,
@@ -3862,25 +3863,10 @@ const streamSession = (wsUrl: string, apiKey: string): StreamHandle => {
     };
 };
 
-const DEFAULT_WS_URL = 'wss://ws.zeph.to';
-
-/**
- * A user who only set ZEPH_API_KEY (no `zeph login`, no config file) gets the
- * prod socket by default — mirroring the DEFAULT_API_BASE fallback for REST.
- * The default only applies when the base URL is also the prod default: with a
- * custom base URL, silently pointing the listener at the prod socket while
- * REST talks to another stage would split the device across environments, so
- * that combination still errors loudly.
- */
-export const resolveWsUrl = (
-    args: Record<string, string | boolean>,
-    config: { wsUrl?: string },
-    baseUrl: string,
-): string | null => {
-    const fromArg = typeof args['ws-url'] === 'string' ? (args['ws-url'] as string) : null;
-    return fromArg || resolvedEnv('ZEPH_WS_URL') || config.wsUrl
-        || (baseUrl === DEFAULT_API_BASE ? DEFAULT_WS_URL : null);
-};
+// Resolution (and its precedence) lives in ws-url.ts so `zeph verify` can ask
+// the same question without loading this module. Re-exported because
+// listener.test.ts has always asked it here.
+export { resolveWsUrl } from './ws-url.js';
 
 // ── Singleton guard (PID file) ──────────────────────────────────────
 
@@ -4043,7 +4029,7 @@ export const handleListener = async (args: Record<string, string | boolean>): Pr
     const baseUrl = (args['base-url'] as string) || resolvedEnv('ZEPH_BASE_URL') || config.baseUrl || DEFAULT_API_BASE;
     setAttachmentContext({ apiKey, baseUrl });
 
-    const wsUrl = resolveWsUrl(args, config, baseUrl);
+    const wsUrl = resolveWsUrlDetailed(args, config, baseUrl)?.url ?? null;
     if (!wsUrl) {
         console.error(
             'zeph listener: WebSocket URL not set. Either:\n' +

@@ -207,7 +207,11 @@ block here.
    behalf. tmux has no Windows build, so `zeph cc` needs WSL there.
 
 2. **Add `wsUrl` to `~/.zeph/config.json`** (the WebSocket endpoint of
-   your Zeph backend — CDK output `WsApiUrl`):
+   your Zeph backend — CDK output `WsApiUrl`). Keep it on the same stage as
+   `baseUrl`: the REST stage is the path prefix (`/v1` prod, `/d1` dev) and the
+   socket stage is the hostname, so they can disagree without either looking
+   wrong. `zeph verify` says which stage each one is on, and the listener only
+   reads this at startup — `zeph listener --restart` after editing:
 
    ```json
    {
@@ -523,7 +527,7 @@ zeph notify --title "Hello" --json
 | `login` | Browser sign-in: auto-fetch API key + hook into `~/.zeph/config.json` over a localhost loopback (`--web-url`, `--timeout`). No copy-paste |
 | `install` (alias: `setup`) | One-command setup: detect agents, save config, install rules + hooks + MCP. No saved config → opens browser login automatically. `--only claude,cursor,…` skips the picker |
 | `uninstall` | Remove Zeph from all detected agents (`--dry-run`, `--purge`) |
-| `verify` | Check installation health across detected agents (`--ping` for a live API call) |
+| `verify` | Check installation health across detected agents (`--ping` for a live API call). Also reports the resolved WebSocket URL **and where it came from** — flag, `ZEPH_WS_URL`, config, or the built-in default — warns when the socket and the API base are on different stages, and warns when the running listener is on a different URL than the one that resolves now (it reads the config once, at startup) |
 | `check-update` | Check whether a newer Zeph version is on npm |
 | `notify` | Send a push notification |
 | `list` | List recent push notifications |
