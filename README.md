@@ -200,8 +200,11 @@ block here.
 ### Setup
 
 1. **Install tmux.** The listener uses `send-keys`; the wrapper spawns
-   named sessions. `brew install tmux` on macOS, `apt install tmux` on
-   Debian/Ubuntu.
+   named sessions. `zeph install` checks for it and, on macOS with Homebrew,
+   offers to run `brew install tmux` for you. Elsewhere it prints the line to
+   run — `sudo apt install tmux` on Debian/Ubuntu, and so on — because
+   installing with `sudo` is not something an installer should do on your
+   behalf. tmux has no Windows build, so `zeph cc` needs WSL there.
 
 2. **Add `wsUrl` to `~/.zeph/config.json`** (the WebSocket endpoint of
    your Zeph backend — CDK output `WsApiUrl`):
