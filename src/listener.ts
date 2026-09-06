@@ -28,7 +28,7 @@ import { homedir, hostname, userInfo } from 'os';
 import { join, basename, isAbsolute, resolve, sep } from 'path';
 import WebSocket from 'ws';
 import { loadConfig, resolvedEnv, VERSION } from './config.js';
-import { resolveWsUrlDetailed } from './ws-url.js';
+import { legacyWsEnvNotice, resolveWsUrlDetailed } from './ws-url.js';
 import {
     clearListenerRuntime,
     clearStaleListenerRuntime,
@@ -3884,12 +3884,14 @@ const otherListenerAlive = (): number | null => {
     return pid === null || pid === process.pid ? null : pid;
 };
 
-const writeListenerPid = (): void => {
+const writeListenerPid = (wsUrl?: string): void => {
     try {
         // Stamp the version alongside the pid: `npm i -g` swaps the package
         // on disk without touching this already-running process, and the
-        // stamp is how `zeph cc` notices the drift and restarts us.
-        writeListenerRuntime(VERSION);
+        // stamp is how `zeph cc` notices the drift and restarts us. The socket
+        // goes with it so `zeph verify` can say what this daemon is actually
+        // connected to without reading a log that rotates out from under it.
+        writeListenerRuntime(VERSION, wsUrl);
     } catch (err) {
         log(`! could not write ${LISTENER_PID_FILE}: ${(err as Error).message}`);
     }
@@ -4029,18 +4031,19 @@ export const handleListener = async (args: Record<string, string | boolean>): Pr
     const baseUrl = (args['base-url'] as string) || resolvedEnv('ZEPH_BASE_URL') || config.baseUrl || DEFAULT_API_BASE;
     setAttachmentContext({ apiKey, baseUrl });
 
+    const staleWsEnv = legacyWsEnvNotice(config);
+    if (staleWsEnv) console.error(staleWsEnv);
     const wsUrl = resolveWsUrlDetailed(args, config, baseUrl)?.url ?? null;
     if (!wsUrl) {
         console.error(
             'zeph listener: WebSocket URL not set. Either:\n' +
             '  • add "wsUrl": "wss://..." to ~/.zeph/config.json\n' +
-            '  • export ZEPH_WS_URL=wss://...\n' +
             '  • pass --ws-url wss://...',
         );
         return 1;
     }
 
-    writeListenerPid();
+    writeListenerPid(wsUrl);
     process.on('exit', removeListenerPid);
 
     // Rotate before writing anything, so this run's first line lands in the

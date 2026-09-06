@@ -221,7 +221,12 @@ block here.
    }
    ```
 
-   Alternatively set `ZEPH_WS_URL` in your shell env.
+   This is where it belongs. `--ws-url` overrides it for a single run.
+   `ZEPH_WS_URL` is deprecated: it used to outrank this file, which meant an
+   `export` in a shell profile silently chose the stage and left no trace of
+   having done so. It now loses to the file and is read only when the file has
+   no `wsUrl`, so nothing that worked stops working — but it will go, and
+   `zeph verify` says so while it is still set.
 
 3. **Run agents through the wrapper.** That's it.
 
@@ -527,7 +532,7 @@ zeph notify --title "Hello" --json
 | `login` | Browser sign-in: auto-fetch API key + hook into `~/.zeph/config.json` over a localhost loopback (`--web-url`, `--timeout`). No copy-paste |
 | `install` (alias: `setup`) | One-command setup: detect agents, save config, install rules + hooks + MCP. No saved config → opens browser login automatically. `--only claude,cursor,…` skips the picker |
 | `uninstall` | Remove Zeph from all detected agents (`--dry-run`, `--purge`) |
-| `verify` | Check installation health across detected agents (`--ping` for a live API call). Also reports the resolved WebSocket URL **and where it came from** — flag, `ZEPH_WS_URL`, config, or the built-in default — warns when the socket and the API base are on different stages, and warns when the running listener is on a different URL than the one that resolves now (it reads the config once, at startup) |
+| `verify` | Check installation health across detected agents (`--ping` for a live API call). Also reports the resolved WebSocket URL **and where it came from** — `--ws-url`, config, the deprecated `ZEPH_WS_URL`, or the built-in default — warns when the socket and the API base are on different stages, and warns when the running listener is on a different URL than the one that resolves now (it reads the config once, at startup) |
 | `check-update` | Check whether a newer Zeph version is on npm |
 | `notify` | Send a push notification |
 | `list` | List recent push notifications |
@@ -563,7 +568,7 @@ which project + branch finished without writing per-IDE wrappers. Pass
 
 | Flag | Description |
 |------|-------------|
-| `--ws-url <url>` | WebSocket endpoint (or set `ZEPH_WS_URL` env, or `wsUrl` in `~/.zeph/config.json`) |
+| `--ws-url <url>` | WebSocket endpoint for this run only; the lasting setting is `wsUrl` in `~/.zeph/config.json` |
 | `--key <api-key>` | API key (or set `ZEPH_API_KEY` env) |
 | `--base-url <url>` | REST API base URL (or set `ZEPH_BASE_URL` env, or `baseUrl` in `~/.zeph/config.json`) |
 | `--stop` | Stop the running daemon and clear its PID/version stamps |
@@ -667,7 +672,7 @@ The CLI checks `CLAUDE_PROJECT_DIR`, `CURSOR_PROJECT_DIR`,
 |----------|-------------|
 | `ZEPH_API_KEY` | API key (fallback when `--key` not provided) |
 | `ZEPH_BASE_URL` | API base URL (default: `https://api.zeph.to/v1`) |
-| `ZEPH_WS_URL` | WebSocket endpoint for `zeph listener` (no default — required) |
+| `ZEPH_WS_URL` | **Deprecated.** WebSocket endpoint for `zeph listener`. `wsUrl` in `~/.zeph/config.json` wins over it; read only when the file has none. It will stop being read |
 | `ZEPH_TMUX_SOCKET` | Explicit tmux socket path for the listener (skips auto-discovery — use when your tmux runs with `-L <name>` or a custom `-S <path>`) |
 | `ZEPH_SESSION_ID` | AI session ID (fallback when `--session` not provided) |
 

@@ -10,13 +10,24 @@
  * Its own module rather than listener.ts so `zeph verify` can ask without
  * loading the 187KB daemon.
  */
-import { resolvedEnv } from './config.js';
-
 export const DEFAULT_API_BASE = 'https://api.zeph.to/v1';
 export const DEFAULT_WS_URL = 'wss://ws.zeph.to';
 
-/** Which of the four inputs won. Reported to the user verbatim. */
-export type WsUrlSource = 'flag' | 'env' | 'config' | 'default';
+/**
+ * Which input won. Reported to the user verbatim.
+ *
+ * `ZEPH_WS_URL` used to sit ABOVE the config file, so an `export` in a shell
+ * profile silently outranked `~/.zeph/config.json` — invisible in the file,
+ * invisible in the app, indistinguishable from "the config is not being read".
+ * It now sits BELOW it, and warns whenever it is what answered.
+ *
+ * Not removed outright, because for one real configuration it was the only
+ * answer: a self-hosted deployment (custom API base) with the URL only in the
+ * environment. Dropping the lane made that listener refuse to start, and on the
+ * `zeph cc` autostart path its stderr goes to the log file, so the machine
+ * would just vanish from the app — the very failure this change exists to end.
+ */
+export type WsUrlSource = 'flag' | 'config' | 'env-deprecated' | 'default';
 
 export interface ResolvedWsUrl {
     readonly url: string;
@@ -39,10 +50,13 @@ export const resolveWsUrlDetailed = (
     const fromArg = typeof args['ws-url'] === 'string' ? (args['ws-url'] as string) : null;
     if (fromArg) return { url: fromArg, source: 'flag' };
 
-    const fromEnv = resolvedEnv('ZEPH_WS_URL');
-    if (fromEnv) return { url: fromEnv, source: 'env' };
-
     if (config.wsUrl) return { url: config.wsUrl, source: 'config' };
+
+    // Below the config file, and above the built-in default: a machine that
+    // only ever had the environment variable keeps the stage it was on instead
+    // of being silently relocated to prod (or refusing to start).
+    const legacyEnv = legacyWsEnv();
+    if (legacyEnv) return { url: legacyEnv, source: 'env-deprecated' };
 
     return baseUrl === DEFAULT_API_BASE ? { url: DEFAULT_WS_URL, source: 'default' } : null;
 };
@@ -102,4 +116,36 @@ export const parseListenerStartUrl = (logText: string): string | null => {
     const starts = [...logText.matchAll(/zeph listener starting\b.*?(\S+)\s*$/gm)];
     const last = starts.at(-1);
     return last ? last[1] : null;
+};
+
+/**
+ * A one-line notice for a machine that still exports `ZEPH_WS_URL`, or null.
+ *
+ * The variable is no longer read, and dropping it in silence would be the same
+ * failure it caused: a value that appears to be in effect while something else
+ * decides. Read only to say it is being ignored, never to use.
+ */
+export const legacyWsEnv = (env: NodeJS.ProcessEnv = process.env): string | null => {
+    const value = env.ZEPH_WS_URL;
+    // Same guard resolvedEnv applies: an unexpanded "${ZEPH_WS_URL}" from an
+    // agent's env block is a placeholder, not a value.
+    return value && !value.startsWith('${') ? value : null;
+};
+
+/**
+ * What to tell a machine that still exports `ZEPH_WS_URL`, or null.
+ *
+ * Two different messages, because the two situations are not the same problem:
+ * the config file now wins, so an export alongside it is dead weight, while an
+ * export on its own is still holding the machine up and must not be deleted
+ * before the value is moved.
+ */
+export const legacyWsEnvNotice = (
+    config: { wsUrl?: string } = {},
+    env: NodeJS.ProcessEnv = process.env,
+): string | null => {
+    if (!legacyWsEnv(env)) return null;
+    return config.wsUrl
+        ? 'zeph: ZEPH_WS_URL is set but ~/.zeph/config.json wins now — the export does nothing and can go.'
+        : 'zeph: ZEPH_WS_URL is deprecated and will stop being read — move the value to "wsUrl" in ~/.zeph/config.json.';
 };

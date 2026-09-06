@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-    DEFAULT_API_BASE, DEFAULT_WS_URL, endpointStage, parseListenerStartUrl, resolveWsUrlDetailed,
+    DEFAULT_API_BASE, DEFAULT_WS_URL, endpointStage, legacyWsEnvNotice, parseListenerStartUrl,
+    resolveWsUrlDetailed,
 } from './ws-url.js';
 
 const original = process.env.ZEPH_WS_URL;
@@ -19,10 +20,44 @@ describe('resolveWsUrlDetailed', () => {
             .toEqual({ url: 'wss://flag', source: 'flag' });
     });
 
-    it('names the environment when ZEPH_WS_URL is set', () => {
+    // ZEPH_WS_URL used to sit ABOVE the config file, so an export in a shell
+    // profile outranked ~/.zeph/config.json invisibly — indistinguishable from
+    // the config not being read. That inversion is what this pins.
+    it('lets the config file beat ZEPH_WS_URL', () => {
         process.env.ZEPH_WS_URL = 'wss://env';
         expect(resolveWsUrlDetailed({}, { wsUrl: 'wss://cfg' }, DEFAULT_API_BASE))
-            .toEqual({ url: 'wss://env', source: 'env' });
+            .toEqual({ url: 'wss://cfg', source: 'config' });
+    });
+
+    // Not removed outright: for a self-hosted deployment with the URL only in
+    // the environment, this was the only answer, and dropping it made the
+    // listener refuse to start where it used to work.
+    it('still answers from ZEPH_WS_URL when nothing else can, and says so', () => {
+        process.env.ZEPH_WS_URL = 'wss://self-hosted';
+        expect(resolveWsUrlDetailed({}, {}, 'https://xyz.execute-api.eu-west-1.amazonaws.com/prod'))
+            .toEqual({ url: 'wss://self-hosted', source: 'env-deprecated' });
+    });
+
+    // It outranks the built-in default too, or a machine that only ever had the
+    // export would be silently relocated to the prod socket.
+    it('keeps the environment stage rather than falling through to the prod default', () => {
+        process.env.ZEPH_WS_URL = 'wss://ws-dev.zeph.to';
+        expect(resolveWsUrlDetailed({}, {}, DEFAULT_API_BASE))
+            .toEqual({ url: 'wss://ws-dev.zeph.to', source: 'env-deprecated' });
+    });
+
+    // An agent env block that passes "${ZEPH_WS_URL}" through unexpanded is a
+    // placeholder, not a value — the same guard resolvedEnv applies.
+    it('ignores an unexpanded placeholder', () => {
+        process.env.ZEPH_WS_URL = '${ZEPH_WS_URL}';
+        expect(resolveWsUrlDetailed({}, {}, DEFAULT_API_BASE))
+            .toEqual({ url: DEFAULT_WS_URL, source: 'default' });
+    });
+
+    // The one escape hatch for a stranded machine, pinned so it stays open.
+    it('honours --ws-url even when the API base is custom', () => {
+        expect(resolveWsUrlDetailed({ 'ws-url': 'wss://flag' }, {}, 'https://xyz.execute-api.eu-west-1.amazonaws.com/prod'))
+            .toEqual({ url: 'wss://flag', source: 'flag' });
     });
 
     it('names the config file when it is what supplied the value', () => {
@@ -92,5 +127,30 @@ describe('parseListenerStartUrl', () => {
     it('returns null for a log with no start line', () => {
         expect(parseListenerStartUrl('[03:26:21] device=dev_listener_abc host=mac pid=1\n')).toBeNull();
         expect(parseListenerStartUrl('')).toBeNull();
+    });
+});
+
+// Removing the variable in silence would repeat the failure it caused: a value
+// that looks like it is in effect while something else decides.
+describe('legacyWsEnvNotice', () => {
+    // Two situations, two messages: an export beside a config file is dead
+    // weight, an export on its own is still holding the machine up and must not
+    // be deleted before the value moves.
+    it('tells a machine with no config where the value belongs', () => {
+        const notice = legacyWsEnvNotice({}, { ZEPH_WS_URL: 'wss://old' });
+        expect(notice).toContain('ZEPH_WS_URL');
+        expect(notice).toContain('wsUrl');
+        expect(notice).not.toContain('does nothing');
+    });
+
+    it('tells a migrated machine the export is now dead weight', () => {
+        const notice = legacyWsEnvNotice({ wsUrl: 'wss://cfg' }, { ZEPH_WS_URL: 'wss://old' });
+        expect(notice).toContain('does nothing');
+    });
+
+    it('says nothing when the variable is absent, empty, or an unexpanded placeholder', () => {
+        expect(legacyWsEnvNotice({}, {})).toBeNull();
+        expect(legacyWsEnvNotice({}, { ZEPH_WS_URL: '' })).toBeNull();
+        expect(legacyWsEnvNotice({}, { ZEPH_WS_URL: '${ZEPH_WS_URL}' })).toBeNull();
     });
 });
