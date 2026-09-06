@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
@@ -7,7 +7,8 @@ import { ZephHook } from './zeph-hook.js';
 import { loadConfig, resolvedEnv, saveConfig, CONFIG_FILE, VERSION } from './config.js';
 import type { ZephConfig } from './config.js';
 import { runLoginFlow, resolveWebUrl, resolveTimeoutSec } from './login.js';
-import { detectAgents } from './agents.js';
+import { detectAgents, resolveCommand } from './agents.js';
+import { ensureTmux, planTmuxInstall } from './tmux-install.js';
 import {
   GEMINI_MCP_ADD, GEMINI_MCP_ADD_LEGACY, MCP_SERVERS_ENTRY, OPENCODE_MCP_ENTRY,
 } from './mcp-command.js';
@@ -504,7 +505,7 @@ const applyServiceChoice = async (choice: 'yes' | 'no' | 'ask'): Promise<void> =
     try {
       const { confirm } = await import('@inquirer/prompts');
       wanted = await confirm({
-        message: 'Start the listener at every login? (so the phone sees this machine after a reboot)',
+        message: 'Start the listener at every login, so the phone sees this machine after a reboot? (enter to confirm)',
         default: true,
       });
     } catch {
@@ -594,6 +595,7 @@ export const handleInstall = async (args: Record<string, string | boolean>): Pro
     if (selected.length === 0) {
       console.log('    (no agents selected — only the config file will be saved)');
     }
+    console.log('    - Check tmux (`zeph cc` runs agents inside it)');
     if (serviceInstallChoice(args, nonInteractive) !== 'no') {
       console.log('    - Offer to start the listener at every login');
     }
@@ -620,11 +622,29 @@ export const handleInstall = async (args: Record<string, string | boolean>): Pro
     if (installer) installer();
   }
 
-  // 7. Login-time service — the only thing that makes the phone see this
+  // 7. tmux — `zeph cc` is tmux or nothing, so check before claiming success.
+  console.log('\n  Checking tmux...');
+  await ensureTmux({
+    plan: planTmuxInstall({ resolve: resolveCommand, platform: process.platform }),
+    nonInteractive,
+    askConfirm: async (message) => {
+      try {
+        const { confirm } = await import('@inquirer/prompts');
+        return await confirm({ message, default: true });
+      } catch {
+        // Ctrl-C or no TTY — an unanswered question is not a yes.
+        return false;
+      }
+    },
+    run: (argv) => { execFileSync(argv[0], argv.slice(1), { stdio: 'inherit' }); },
+    report: { ok, fail, note: skipNote },
+  });
+
+  // 8. Login-time service — the only thing that makes the phone see this
   //    machine after a reboot without a terminal being opened first.
   await applyServiceChoice(serviceInstallChoice(args, nonInteractive));
 
-  // 8. Test connection
+  // 9. Test connection
   console.log('\n  Testing connection...');
   await testConnection(apiKey, baseUrl);
 
