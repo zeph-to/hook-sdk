@@ -11,6 +11,7 @@
  */
 import { execFileSync, spawn, spawnSync } from 'child_process';
 import { basename } from 'path';
+import { resolveCommand } from './agents.js';
 import { isNewer } from './check-update.js';
 import { PROJECT_DIR_ENV_VARS, resolvedEnv, VERSION } from './config.js';
 import {
@@ -112,6 +113,14 @@ export const findAvailableSession = (base: string): string => {
 };
 
 interface SpawnTarget {
+    /**
+     * `tmux-new` opens (or reattaches) a session and needs a terminal to
+     * attach to; `direct` runs the agent in the pane we are already in and
+     * does not. Several decisions downstream turn on which one this is, so
+     * `targetForAgent` states it rather than letting them re-derive it from
+     * `cmd === 'tmux'`.
+     */
+    kind: 'direct' | 'tmux-new';
     cmd: string;
     args: string[];
 }
@@ -121,12 +130,12 @@ const SHELL_SAFE = /^[\w\-./=:@%+,]+$/;
 const shellQuote = (s: string): string =>
     s.length > 0 && SHELL_SAFE.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
 
-const targetForAgent = (agent: string, extra: string[]): SpawnTarget => {
+export const targetForAgent = (agent: string, extra: string[]): SpawnTarget => {
     // Already inside tmux → no nested session, just run the agent in the
     // current pane. Nested tmux prefix collisions are confusing and the
     // listener can't reach a session it didn't name anyway.
     if (process.env.TMUX) {
-        return { cmd: agent, args: extra };
+        return { kind: 'direct', cmd: agent, args: extra };
     }
     const base = tmuxSessionName(detectProjectName());
     // Reattach a detached session of this project when there is one,
@@ -139,7 +148,7 @@ const targetForAgent = (agent: string, extra: string[]): SpawnTarget => {
     // `--resume` would be eaten by tmux's own parser. Build one quoted
     // shell string instead, which tmux passes through verbatim.
     const shellCmd = [agent, ...extra].map(shellQuote).join(' ');
-    return { cmd: 'tmux', args: ['new', '-A', '-s', session, shellCmd] };
+    return { kind: 'tmux-new', cmd: 'tmux', args: ['new', '-A', '-s', session, shellCmd] };
 };
 
 // ── Background listener auto-start ────────────────────────────────────
@@ -210,22 +219,82 @@ export const ensureListenerRunning = async (): Promise<void> => {
  * `zeph cc --resume foo` runs `claude --resume foo` inside the session.
  * Returns when the agent exits.
  */
+/** `process.execve` with the optionality resolved — see handOffExec. */
+export type ProcessHandOff = NonNullable<typeof process.execve>;
+
+/**
+ * The exec that replaces this process with the child, or null when the wrapper
+ * has to stay and wait instead. Returning the function rather than a boolean
+ * keeps one check where two would otherwise drift: the platform gate and the
+ * policy are the same answer.
+ *
+ * `process.execve` is declared optional by @types/node, and is absent on node
+ * <22.15 (added there) and on Windows (its doc: "not available on Windows or
+ * IBM i"), so its presence covers both without a version check. `engines.node`
+ * is `>=18`, so the spawn path below is not a transitional fallback — it stays.
+ *
+ * `isTTY` is `undefined` rather than `false` on a pipe, hence every `=== true`.
+ */
+export const handOffExec = (deps: {
+    execve: ProcessHandOff | undefined;
+    kind: SpawnTarget['kind'];
+    stdinTTY: boolean | undefined;
+    stdoutTTY: boolean | undefined;
+}): ProcessHandOff | null => {
+    if (!deps.execve) return null;
+    // execve runs no cleanup handler, and node only writes stdout synchronously
+    // to a TTY on POSIX — anything buffered to a pipe would vanish with us.
+    if (deps.stdoutTTY !== true) return null;
+    // `tmux new` additionally needs a terminal of its own to attach to. That is
+    // the failure the spawn path below exists to explain, so send it there.
+    if (deps.kind === 'tmux-new' && deps.stdinTTY !== true) return null;
+    return deps.execve;
+};
+
 export const handleAgentSession = async (agent: RemoteAgent, extra: string[] = []): Promise<number> => {
     // Best-effort: make sure the phone-bridge daemon is running, and running
     // the build we were launched from. The user shouldn't need to remember a
     // second command for the picker on their phone to work.
     await ensureListenerRunning();
+    const { kind, cmd, args } = targetForAgent(agent.binary, extra);
+
+    // Hand the terminal over and stop existing. Waiting on the child is all
+    // this process does for the rest of the session, and it holds a whole node
+    // heap to do it — one resident process per `zeph cc`, purely to forward an
+    // exit code that execve gives us for free by being the same process.
+    const handOff = handOffExec({
+        execve: process.execve,
+        kind,
+        stdinTTY: process.stdin.isTTY,
+        stdoutTTY: process.stdout.isTTY,
+    });
+    if (handOff) {
+        const file = resolveCommand(cmd);
+        // execve does no PATH lookup, so resolving is mandatory — and the
+        // resolve failing is the same fact the spawn path learns from ENOENT.
+        if (!file) {
+            console.error(`zeph: '${cmd}' not found on PATH`);
+            return 127;
+        }
+        // Nothing buffered survives: execve runs no cleanup handler and fires
+        // no exit event. Safe here only because stdout is a TTY, which node
+        // writes synchronously on POSIX — every `zeph:` line above is already out.
+        // The env argument is left off: it defaults to process.env.
+        handOff(file, [cmd, ...args]);
+    }
+
     return new Promise<number>((resolve) => {
-        const { cmd, args } = targetForAgent(agent.binary, extra);
         const start = Date.now();
         const child = spawn(cmd, args, { stdio: 'inherit' });
         child.on('exit', (code) => {
             const dur = Date.now() - start;
             // Short-lived non-zero exits are the symptom of "ran from a
-            // pane that isn't a real TTY" (iTerm tmux integration pane,
-            // some IDE terminals). The user otherwise just sees their
-            // shell return with `[exited]` and no clue what went wrong.
-            if (code && code !== 0 && dur < 2000) {
+            // pane that isn't a real TTY" (some IDE terminals). The user
+            // otherwise just sees their shell return with `[exited]` and no
+            // clue what went wrong. Only `tmux new` fails that way — telling
+            // someone whose agent died inside a perfectly good pane to "run
+            // from a plain shell pane" would send them after the wrong thing.
+            if (kind === 'tmux-new' && code && code !== 0 && dur < 2000) {
                 console.error(
                     `zeph: ${cmd} ${args.join(' ')} exited ${code} after ${dur}ms.\n` +
                     `  If this terminal is itself inside tmux (or an iTerm/Warp\n` +

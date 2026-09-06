@@ -1,8 +1,7 @@
 import { accessSync, constants, existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { execFileSync } from 'child_process';
-import { detectAgents } from './agents.js';
+import { detectAgents, resolveCommand } from './agents.js';
 import { loadConfig, resolvedEnv, resolveHookId, VERSION } from './config.js';
 import { serviceHealthChecks, serviceStatus, type ServiceHealthRow } from './listener-service.js';
 import { ZephHook } from './zeph-hook.js';
@@ -83,15 +82,15 @@ export const registeredMcpArgv = (filePath: string, key: string): string[] | nul
 
 /**
  * Can this launch binary actually be run? Registered commands come out of a
- * config file, so they can be an absolute path with spaces in it — the shared
- * `hasCommand` interpolates into `which ${cmd}`, where such a path splits into
- * two words and reports a perfectly good binary as missing (and where any `;`
- * in the file would reach the shell). Nothing here touches a shell.
+ * config file, so unlike everywhere else in the CLI they can be an absolute
+ * path — `which` is the wrong question for one of those, hence the split.
+ * The bare-name half is `resolveCommand`; neither half touches a shell, so a
+ * path with a space in it stays one word and a `;` in the file stays inert.
  */
 export const binaryResolves = (bin: string): boolean => {
+    if (!bin.includes('/')) return resolveCommand(bin) !== null;
     try {
-        if (bin.includes('/')) accessSync(bin, constants.X_OK);
-        else execFileSync('which', [bin], { stdio: 'pipe' });
+        accessSync(bin, constants.X_OK);
         return true;
     } catch {
         return false;

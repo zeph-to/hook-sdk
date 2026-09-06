@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -15,14 +15,21 @@ export interface Agent {
 
 const HOME = homedir();
 
-export const hasCommand = (cmd: string): boolean => {
+/**
+ * Absolute path of a command on PATH, or null when it isn't there.
+ * `execFileSync`, not a shell: `process.execve` needs a real path (it does no
+ * PATH lookup of its own), and building `which ${cmd}` as a shell string would
+ * let a path containing a space split into two words.
+ */
+export const resolveCommand = (cmd: string): string | null => {
     try {
-        execSync(`which ${cmd}`, { stdio: 'pipe' });
-        return true;
+        return execFileSync('which', [cmd], { encoding: 'utf-8' }).trim() || null;
     } catch {
-        return false;
+        return null;
     }
 };
+
+export const hasCommand = (cmd: string): boolean => resolveCommand(cmd) !== null;
 
 export const detectAgents = (): Agent[] => [
     { name: 'Claude Code', id: 'claude', detected: hasCommand('claude') },
