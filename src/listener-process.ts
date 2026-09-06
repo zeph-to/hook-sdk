@@ -25,6 +25,13 @@ const ZEPH_DIR = join(homedir(), '.zeph');
 export const LISTENER_PID_FILE = join(ZEPH_DIR, 'listener.pid');
 /** CLI version the running daemon booted from. Absent ⇒ pre-stamp build. */
 export const LISTENER_VERSION_FILE = join(ZEPH_DIR, 'listener.version');
+/**
+ * The socket the running daemon actually connected to. A stamp rather than a
+ * line in listener.log, because the log rotates at 5MB and a long-lived daemon
+ * — exactly the one whose config edit has been outlived — loses its own startup
+ * line to that rotation, which would silently switch the staleness check off.
+ */
+export const LISTENER_WS_URL_FILE = join(ZEPH_DIR, 'listener.wsurl');
 export const LISTENER_LOG_FILE = join(ZEPH_DIR, 'listener.log');
 
 export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -59,10 +66,21 @@ export const runningListenerVersion = (): string | null => {
 };
 
 /** Claim the singleton slot for THIS process and stamp the version with it. */
-export const writeListenerRuntime = (version: string): void => {
+export const writeListenerRuntime = (version: string, wsUrl?: string): void => {
     mkdirSync(ZEPH_DIR, { recursive: true });
     writeFileSync(LISTENER_PID_FILE, String(process.pid));
     writeFileSync(LISTENER_VERSION_FILE, version);
+    if (wsUrl) writeFileSync(LISTENER_WS_URL_FILE, wsUrl);
+};
+
+/** The socket the running daemon connected to, or null when it is unknown. */
+export const runningListenerWsUrl = (): string | null => {
+    if (runningListenerPid() === null) return null;
+    try {
+        return readFileSync(LISTENER_WS_URL_FILE, 'utf-8').trim() || null;
+    } catch {
+        return null;
+    }
 };
 
 /**
@@ -75,9 +93,11 @@ export const clearListenerRuntime = (pid: number): void => {
         if (!existsSync(LISTENER_PID_FILE)) return;
         if (Number(readFileSync(LISTENER_PID_FILE, 'utf-8').trim()) !== pid) return;
         unlinkSync(LISTENER_PID_FILE);
-        try {
-            unlinkSync(LISTENER_VERSION_FILE);
-        } catch { /* best-effort — a missing stamp is already the desired state */ }
+        for (const stamp of [LISTENER_VERSION_FILE, LISTENER_WS_URL_FILE]) {
+            try {
+                unlinkSync(stamp);
+            } catch { /* best-effort — a missing stamp is already the desired state */ }
+        }
     } catch { /* best-effort */ }
 };
 

@@ -6,6 +6,13 @@ import { loadConfig, resolvedEnv, resolveHookId, VERSION } from './config.js';
 import { serviceHealthChecks, serviceStatus, type ServiceHealthRow } from './listener-service.js';
 import { ZephHook } from './zeph-hook.js';
 import { MCP_LAUNCH_ARGV } from './mcp-command.js';
+import {
+    LISTENER_LOG_FILE, runningListenerPid, runningListenerWsUrl as stampedListenerWsUrl,
+} from './listener-process.js';
+import {
+    DEFAULT_API_BASE, endpointStage, legacyWsEnvNotice, parseListenerStartUrl, resolveWsUrlDetailed,
+    type WsUrlSource,
+} from './ws-url.js';
 
 const HOME = homedir();
 
@@ -131,6 +138,33 @@ const activeMcpRegistrations = (
         return result ? [{ agent: registry.agent, result }] : [];
     });
 
+/** Where a resolved WebSocket URL came from, in the user's terms. */
+const WS_SOURCE_LABEL: Record<WsUrlSource, string> = {
+    flag: '--ws-url',
+    config: '~/.zeph/config.json',
+    'env-deprecated': 'ZEPH_WS_URL (deprecated)',
+    default: 'built-in default',
+};
+
+/**
+ * The URL the live daemon connected to, or null when none is running.
+ *
+ * The stamp first; the log only as a fallback, for a daemon started by a build
+ * that predates the stamp. Reading the log alone was not enough — it rotates at
+ * 5MB, and the daemon whose startup line has been rotated away is precisely the
+ * long-lived one whose config edit this check exists to catch.
+ */
+const liveListenerWsUrl = (): string | null => {
+    if (runningListenerPid() === null) return null;
+    const stamped = stampedListenerWsUrl();
+    if (stamped) return stamped;
+    try {
+        return parseListenerStartUrl(readFileSync(LISTENER_LOG_FILE, 'utf-8'));
+    } catch {
+        return null;
+    }
+};
+
 export const handleVerify = async (args: Record<string, string | boolean>): Promise<number> => {
     const doPing = args.ping === true;
     const checks: Check[] = [];
@@ -188,6 +222,37 @@ export const handleVerify = async (args: Record<string, string | boolean>): Prom
     if (serviceRows.length > 0) {
         console.log('\n  Login-time service:');
         for (const row of serviceRows) record(row.label, row.state);
+    }
+
+    // ── WebSocket ────────────────────────────────────────────────
+    // The phone's Agents list is fed over this socket, so a machine on the
+    // wrong stage is simply absent from the app with nothing to explain it.
+    console.log('\n  WebSocket:');
+    const wsBaseUrl = (args['base-url'] as string) || resolvedEnv('ZEPH_BASE_URL') || config.baseUrl || DEFAULT_API_BASE;
+    const staleWsEnv = legacyWsEnvNotice(config);
+    if (staleWsEnv) record(staleWsEnv.replace(/^zeph: /, ''), 'warn');
+    const ws = resolveWsUrlDetailed(args, config, wsBaseUrl);
+    if (!ws) {
+        record('no WebSocket URL, and none can be guessed for a custom API base — set "wsUrl" in ~/.zeph/config.json', 'fail');
+    } else {
+        record(`${ws.url} (from ${WS_SOURCE_LABEL[ws.source]})`, 'pass');
+
+        // Socket on one stage and REST on another splits the device: pushes go
+        // one way, the agent list the other, and neither half looks broken.
+        const wsStage = endpointStage(ws.url);
+        const apiStage = endpointStage(wsBaseUrl);
+        record(wsStage === apiStage
+            ? `API base is the same stage (${apiStage})`
+            : `stage mismatch — socket is ${wsStage}, API base is ${apiStage} (${wsBaseUrl}). Pushes and the agent list would land in different environments`,
+            wsStage === apiStage ? 'pass' : 'warn');
+
+        // The daemon reads this once, at startup. Editing the config does
+        // nothing to a listener that has been up since before the edit — which
+        // looks exactly like the config not being read at all.
+        const live = liveListenerWsUrl();
+        if (live && live !== ws.url) {
+            record(`the running listener is on ${live}, not the resolved URL — restart it: zeph listener --restart`, 'warn');
+        }
     }
 
     // ── MCP registrations ────────────────────────────────────────

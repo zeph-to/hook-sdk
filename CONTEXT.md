@@ -16,7 +16,7 @@ share **one** Machine Device identity and **one** Device Keypair. The phone sees
 device per machine, not one per process.
 
 ### Config precedence
-env (`ZEPH_WS_URL` 등) > config file > built-in default — cli/mcp-server/plugin
+flag > config file > built-in default — cli/mcp-server/plugin. `wsUrl` 만 예외로 env 가 **config 아래**다 (`ZEPH_WS_URL` deprecated — 셸 프로파일 export 가 config 를 조용히 덮던 것을 뒤집었고, 그것만 있는 머신이 안 죽게 최하위로 남겨둠)
 3패키지 공통 계약. CLI flag 최상위 tier는 cli 전용(mcp-server는 stdio 서버,
 plugin은 hook이라 flag 없음). 우선순위 변경 시 이 절부터 갱신한다.
 
