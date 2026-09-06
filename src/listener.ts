@@ -62,6 +62,7 @@ import { startInventoryOffload, type InventoryOffload } from './inventory-offloa
 import { getActiveManifest, loadManifestFromCache, refreshManifest, RULES_REFRESH_INTERVAL_MS } from './agent-rules-fetch.js';
 import { decryptEphemeral, encryptEphemeral, getDevicePublicKey, initDeviceCrypto, type EncryptedEphemeralPayload } from './crypto.js';
 import { createInputSequencer, type InputSequencer, type SequencedInput } from './input-sequencer.js';
+import { startKeepAwake } from './keep-awake.js';
 
 const PING_INTERVAL_MS = 25_000;
 const PONG_TIMEOUT_MS = 10_000;
@@ -4070,6 +4071,13 @@ export const handleListener = async (args: Record<string, string | boolean>): Pr
     log(`device=${computeListenerDeviceId()} host=${hostname()} pid=${process.pid}`);
     log("Waiting for 'agent.command' pushes from the phone picker. Ctrl-C to stop.");
 
+    // Idle sleep kills the socket; "Wake for network access" does not bring it
+    // back (see keep-awake.ts). Flag beats config; the default is on.
+    const keepAwake = startKeepAwake({
+        enabled: args['no-keep-awake'] !== true && config.keepAwake !== false,
+        log,
+    });
+
     // Heartbeat memory log — once an hour. Lets the user (and us) spot
     // gradual growth in a long-running daemon before it gets bad enough
     // to make the host shell unresponsive. The MB counter is human-
@@ -4125,6 +4133,7 @@ export const handleListener = async (args: Record<string, string | boolean>): Pr
         // Force-close any open WS so the streamSession promise resolves
         // immediately instead of waiting for the server to drop us.
         activeHandle?.terminate();
+        keepAwake.stop();
         notifyStop();
     };
     process.on('SIGINT', () => stop('SIGINT'));

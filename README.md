@@ -328,6 +328,24 @@ With the service installed, launchd owns the process: `zeph cc` and
 `zeph listener --stop|--restart` ask launchd rather than signalling the
 PID, so there is never a second daemon racing the first.
 
+### Keeping the Mac awake
+
+The listener holds an *outbound* socket, and macOS **"Wake for network
+access" does not protect it** — that setting only wakes the machine for
+inbound requests to services it advertises. When the Mac idle-sleeps, the
+socket dies and the phone shows "Waiting for the live stream…" until
+someone opens the lid. A Mac running Claude Code hides this (the agent
+runs `caffeinate` during every turn), so one machine looks fine while
+another, idling at a prompt, keeps dropping.
+
+So on macOS the listener runs `caffeinate -s -w <its pid>` for as long as
+it lives. `-s` is honoured **on AC power only** — on battery macOS ignores
+it, so a laptop still sleeps and nothing drains. The display still turns
+off; a closed lid still sleeps. Activity Monitor shows the daemon under
+"Preventing Sleep". Opt out with `--no-keep-awake` or `"keepAwake": false`
+in `~/.zeph/config.json`; the log's `keep-awake:` line says which way it
+went.
+
 ### Diagnostics
 
 The auto-spawned listener writes to three files under `~/.zeph/`:
@@ -564,6 +582,7 @@ which project + branch finished without writing per-IDE wrappers. Pass
 | `--base-url <url>` | REST API base URL (or set `ZEPH_BASE_URL` env, or `baseUrl` in `~/.zeph/config.json`) |
 | `--stop` | Stop the running daemon and clear its PID/version stamps |
 | `--restart` | Stop it and relaunch detached (logs to `~/.zeph/listener.log`) |
+| `--no-keep-awake` | Don't hold the Mac awake on AC power (macOS). Lasting form: `"keepAwake": false` in `~/.zeph/config.json` |
 
 The listener reconnects with exponential backoff + jitter (1 s → 30 s
 cap). Heartbeat is ping every 25 s with a 10 s pong timeout. On an
