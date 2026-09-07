@@ -117,6 +117,10 @@ ${usageAgentLines()}
                              remove the login-time service
                   --service-status
                              show what the installed service points at
+                  --no-keep-awake
+                             don't hold the Mac awake on AC power
+                             (macOS; default runs 'caffeinate -s' so an
+                              idle Mac keeps the socket up)
 
 Notify options:
   --title <text>     Push title

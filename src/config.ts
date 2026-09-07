@@ -11,6 +11,8 @@ export interface ZephConfig {
   baseUrl?: string;
   wsUrl?: string;
   deviceId?: string;
+  /** `false` stops the listener holding the Mac awake on AC (`caffeinate -s`). README § Listener Options. */
+  keepAwake?: boolean;
 }
 
 export const resolvedEnv = (key: string, env: NodeJS.ProcessEnv = process.env): string | undefined => {
